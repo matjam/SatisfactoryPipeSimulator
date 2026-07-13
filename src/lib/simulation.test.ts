@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAPACITY_PER_METRE, canAttach, cloneDocument, cloneState, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, pipeCapacity, splitPipeAt, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
+import { CAPACITY_PER_METRE, canAttach, cloneDocument, cloneState, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, moveJunction, pipeCapacity, splitPipeAt, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
 
 const endpoint = (attachment?: Endpoint['attachment'], z = 0): Endpoint => ({ x: 0, y: 0, z, attachment })
 const pipe = (id: string, volume: number, attachment: Endpoint['attachment'], other?: Endpoint['attachment'], tier: 300 | 600 = 300): PipeDocument => ({ id, name: id, length: 10, tier, initialVolume: volume, endpoints: [endpoint(attachment), endpoint(other)] })
@@ -146,5 +146,13 @@ describe('buffers, machines, and topology', () => {
     const document = simple([target])
     expect(splitPipeAt(document, target.id, .25, 'junction-short')).toBeUndefined()
     expect(document.pipes).toEqual([target])
+  })
+  it('moves every endpoint connected to a shared junction', () => {
+    const junction = { kind: 'junction' as const, id: 'move-me' }
+    const document = simple([pipe('a', 0, junction), pipe('b', 0, junction), pipe('c', 0, junction)])
+    moveJunction(document, junction.id, 240, -80)
+    const attached = document.pipes.flatMap((item) => item.endpoints).filter((item) => item.attachment?.kind === 'junction')
+    expect(attached).toHaveLength(3)
+    expect(attached.every((item) => item.x === 240 && item.y === -80)).toBe(true)
   })
 })

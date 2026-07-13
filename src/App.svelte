@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import PipeCanvas from './lib/PipeCanvas.svelte'
-  import { canAttach, cloneDocument, componentCapacity, componentFullHead, componentPorts, createDefaultDocument, createId, createSimulation, deleteSelection, makeComponent, pipeCapacity, splitPipeAt, tick, type Attachment, type ComponentKind, type NetworkDocument, type Selection, type SimulationState } from './lib/simulation'
+  import { canAttach, cloneDocument, componentCapacity, componentFullHead, componentPorts, createDefaultDocument, createId, createSimulation, deleteSelection, makeComponent, moveJunction as moveJunctionEndpoints, pipeCapacity, splitPipeAt, tick, type Attachment, type ComponentKind, type NetworkDocument, type Selection, type SimulationState } from './lib/simulation'
   import { decodeDocument, encodeDocument } from './lib/share'
 
   let status = $state('')
@@ -28,6 +28,7 @@
   function addPipe() { const id = createId('pipe'), position = cascade(document.pipes.length); edit((next) => next.pipes.push({ id, name: 'New pipe', length: 10, tier: next.defaultTier, initialVolume: 0, endpoints: [{ x: position.x - 55, y: position.y, z: 0 }, { x: position.x + 55, y: position.y, z: 0 }] })); selected = { kind: 'pipe', id }; status = '' }
   function removeSelected() { if (!selected) return; document = deleteSelection(document, selected); selected = undefined; reset() }
   function moveComponent(id: string, x: number, y: number) { edit((next) => { const component = next.components.find((item) => item.id === id); if (!component) return; const dx = x - component.x, dy = y - component.y; component.x = x; component.y = y; for (const pipe of next.pipes) for (const endpoint of pipe.endpoints) if (endpoint.attachment?.kind === 'component' && endpoint.attachment.id === id) { endpoint.x += dx; endpoint.y += dy } }); status = '' }
+  function moveJunction(id: string, x: number, y: number) { edit((next) => moveJunctionEndpoints(next, id, x, y)); status = '' }
   function attachEndpoint(next: NetworkDocument, pipeId: string, endpointIndex: 0 | 1, x: number, y: number) {
     const pipe = next.pipes.find((item) => item.id === pipeId); if (!pipe) return
     const endpoint = pipe.endpoints[endpointIndex]; endpoint.x = x; endpoint.y = y; delete endpoint.attachment
@@ -84,7 +85,7 @@
   {#if status}<div class="notice" role="status">{status}{#if shareUrl}<input class="share-url" readonly value={shareUrl} onclick={(event) => event.currentTarget.select()} />{/if}</div>{/if}
   <section class="workspace"><div class="stage-panel">
     <div class="panel-heading"><div><span>NETWORK DOCUMENT V{document.version}</span><strong>{document.name.toUpperCase()}</strong></div><div class="mode-switch"><button class:active={mode === 'edit'} onclick={() => setMode('edit')}>EDIT</button><button class:active={mode === 'simulate'} onclick={() => setMode('simulate')}>SIMULATE</button></div><div class="tick-readout">TICK <b>{simulation.tick.toString().padStart(4, '0')}</b></div></div>
-    <div class="stage"><PipeCanvas {document} state={simulation} {mode} {selected} onselect={(value) => selected = value} onmovenode={moveComponent} onmoveendpoint={moveEndpoint} onerror={(message) => status = message} /></div>
+    <div class="stage"><PipeCanvas {document} state={simulation} {mode} {selected} onselect={(value) => selected = value} onmovenode={moveComponent} onmoveendpoint={moveEndpoint} onmovejunction={moveJunction} onerror={(message) => status = message} /></div>
     <div class="transport">{#if mode === 'edit'}<button onclick={() => addComponent('producer')}>+ PRODUCER</button><button onclick={() => addComponent('consumer')}>+ CONSUMER</button><button onclick={() => addComponent('pump')}>+ PUMP</button><button onclick={() => addComponent('valve')}>+ VALVE</button><button onclick={() => addComponent('buffer')}>+ BUFFER</button><button onclick={() => addComponent('industrialBuffer')}>+ INDUSTRIAL</button><button onclick={addPipe}>+ PIPE</button><button class="danger" onclick={removeSelected} disabled={!selected}>DELETE</button>{:else}<button onclick={reset}>RESET</button><button class="primary" onclick={() => simulation = tick(simulation)} disabled={playing}>STEP</button><button onclick={() => setPlaying(!playing)}>{playing ? 'PAUSE' : 'RUN'}</button><label class="speed">SPEED <select bind:value={speed} onchange={restartTimer}><option value={1}>1x</option><option value={2}>2x</option><option value={4}>4x</option><option value={8}>8x</option></select></label>{/if}</div>
   </div><aside>
     <section class="metrics"><p class="eyebrow">SYSTEM TELEMETRY</p><div class="metric"><span>Produced</span><strong>{simulation.stats.produced.toFixed(1)}</strong><small>m3 / tick</small></div><div class="metric"><span>Consumed</span><strong>{simulation.stats.consumed.toFixed(1)}</strong><small>m3 / tick</small></div><div class="metric satisfaction"><span>Cycle demand met</span><strong>{satisfaction.toFixed(0)}%</strong><div><i style={`width:${Math.min(100, satisfaction)}%`}></i></div></div></section>
