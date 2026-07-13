@@ -29,7 +29,10 @@
     return () => { disposed = true; renderer?.destroy() }
   })
 
-  $effect(() => renderer?.draw(document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onmovejunction))
+  $effect(() => {
+    const snapshot = { document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onmovejunction }
+    renderer?.draw(snapshot.document, snapshot.state, snapshot.mode, snapshot.selected, snapshot.onselect, snapshot.onmovenode, snapshot.onmoveendpoint, snapshot.onmovejunction)
+  })
 
   class PipeRenderer {
     private app = new Application()
