@@ -288,6 +288,37 @@ export function deleteSelection(document: NetworkDocument, selection: Selection)
   for (const pipe of next.pipes) for (const endpoint of pipe.endpoints) if (endpoint.attachment?.kind === 'junction' && (counts.get(endpoint.attachment.id) ?? 0) < 2) delete endpoint.attachment
   return next
 }
+export function splitPipeAt(document: NetworkDocument, pipeId: string, fraction: number, junctionId: string): PipeDocument | undefined {
+  const index = document.pipes.findIndex((pipe) => pipe.id === pipeId)
+  if (index < 0) return undefined
+  const pipe = document.pipes[index]
+  if (pipe.length < 2 || !Number.isFinite(fraction)) return undefined
+  const minimumFraction = 1 / pipe.length
+  if (fraction < minimumFraction || fraction > 1 - minimumFraction) return undefined
+  const split = fraction
+  const [start, end] = pipe.endpoints
+  const junction: Endpoint = {
+    x: start.x + (end.x - start.x) * split,
+    y: start.y + (end.y - start.y) * split,
+    z: start.z + (end.z - start.z) * split,
+    attachment: { kind: 'junction', id: junctionId },
+  }
+  const originalLength = pipe.length
+  const originalVolume = pipe.initialVolume
+  const second: PipeDocument = {
+    ...pipe,
+    id: createId('pipe'),
+    name: `${pipe.name} (split)`,
+    length: originalLength * (1 - split),
+    initialVolume: originalVolume * (1 - split),
+    endpoints: [{ ...junction, attachment: { ...junction.attachment! } }, { ...end, attachment: end.attachment ? { ...end.attachment } : undefined }],
+  }
+  pipe.length = originalLength * split
+  pipe.initialVolume = originalVolume * split
+  pipe.endpoints[1] = junction
+  document.pipes.splice(index + 1, 0, second)
+  return second
+}
 export function canAttach(document: NetworkDocument, attachment: Attachment): boolean {
   let count = 0
   const key = attachmentKey(attachment)

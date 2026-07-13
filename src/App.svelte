@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import PipeCanvas from './lib/PipeCanvas.svelte'
-  import { canAttach, cloneDocument, componentCapacity, componentFullHead, componentPorts, createDefaultDocument, createId, createSimulation, deleteSelection, makeComponent, pipeCapacity, tick, type Attachment, type ComponentKind, type NetworkDocument, type Selection, type SimulationState } from './lib/simulation'
+  import { canAttach, cloneDocument, componentCapacity, componentFullHead, componentPorts, createDefaultDocument, createId, createSimulation, deleteSelection, makeComponent, pipeCapacity, splitPipeAt, tick, type Attachment, type ComponentKind, type NetworkDocument, type Selection, type SimulationState } from './lib/simulation'
   import { decodeDocument, encodeDocument } from './lib/share'
 
   let status = $state('')
@@ -39,13 +39,35 @@
       endpoint.x = nearest.x; endpoint.y = nearest.y; endpoint.z = nearest.component.z; endpoint.attachment = attachment; status = ''; return
     }
     for (const otherPipe of next.pipes) for (const candidate of otherPipe.endpoints) {
-      if (candidate === endpoint || Math.hypot(candidate.x - x, candidate.y - y) > 25) continue
+      if (otherPipe.id === pipeId || candidate === endpoint || Math.hypot(candidate.x - x, candidate.y - y) > 25) continue
       let attachment = candidate.attachment
       if (attachment?.kind === 'component') continue
       if (!attachment) { attachment = { kind: 'junction', id: createId('junction') }; candidate.attachment = attachment }
       if (!canAttach(next, attachment)) { status = 'Junction already has four endpoints; endpoint left disconnected.'; return }
       Object.assign(endpoint, { x: candidate.x, y: candidate.y, z: candidate.z, attachment: { ...attachment } }); status = ''; return
     }
+    let bodyMatch: { pipeId: string; fraction: number; distance: number } | undefined, blockedBody = false
+    for (const candidate of next.pipes) {
+      if (candidate.id === pipeId) continue
+      const [start, end] = candidate.endpoints
+      const dx = end.x - start.x, dy = end.y - start.y, lengthSquared = dx * dx + dy * dy
+      if (!lengthSquared) continue
+      const fraction = Math.max(0, Math.min(1, ((x - start.x) * dx + (y - start.y) * dy) / lengthSquared))
+      if (fraction <= .02 || fraction >= .98) continue
+      const distance = Math.hypot(x - (start.x + dx * fraction), y - (start.y + dy * fraction))
+      const minimumFraction = 1 / candidate.length
+      if (distance <= 25 && (candidate.length < 2 || fraction < minimumFraction || fraction > 1 - minimumFraction)) { blockedBody = true; continue }
+      if (distance <= 25 && (!bodyMatch || distance < bodyMatch.distance)) bodyMatch = { pipeId: candidate.id, fraction, distance }
+    }
+    if (bodyMatch) {
+      const junctionId = createId('junction')
+      const second = splitPipeAt(next, bodyMatch.pipeId, bodyMatch.fraction, junctionId)
+      if (second) {
+        const junction = second.endpoints[0]
+        Object.assign(endpoint, { x: junction.x, y: junction.y, z: junction.z, attachment: { kind: 'junction', id: junctionId } })
+        status = ''
+      }
+    } else if (blockedBody) status = 'Cannot split there: both resulting pipe segments must be at least 1m long.'
   }
   function moveEndpoint(pipeId: string, endpoint: 0 | 1, x: number, y: number) { edit((next) => attachEndpoint(next, pipeId, endpoint, x, y)) }
   function updateSelected(field: string, value: string | number | boolean) { if (typeof value === 'number' && !Number.isFinite(value)) return; edit((next) => { const item = selected?.kind === 'pipe' ? next.pipes.find((pipe) => pipe.id === selected?.id) : next.components.find((component) => component.id === selected?.id); if (!item) return; Object.assign(item, { [field]: value }); if ('z' in item && field === 'z' && 'kind' in item) for (const pipe of next.pipes) for (const endpoint of pipe.endpoints) if (endpoint.attachment?.kind === 'component' && endpoint.attachment.id === item.id) endpoint.z = item.z; if ('length' in item) { item.length = Math.max(1, Math.min(56, item.length)); item.initialVolume = Math.min(item.initialVolume, pipeCapacity(item)) } if ('cycleSeconds' in item) { item.cycleSeconds = Math.max(.1, item.cycleSeconds); item.bufferCapacity = Math.max(.001, item.bufferCapacity); item.batchAmount = Math.max(0, item.batchAmount); item.initialBuffer = Math.max(0, Math.min(item.initialBuffer, item.bufferCapacity)) } if ('initialVolume' in item && 'kind' in item) item.initialVolume = Math.max(0, Math.min(item.initialVolume, componentCapacity(item))) }); status = '' }
