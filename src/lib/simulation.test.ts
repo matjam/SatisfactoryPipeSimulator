@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAPACITY_PER_METRE, canAttach, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, pipeCapacity, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
+import { CAPACITY_PER_METRE, canAttach, cloneDocument, cloneState, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, pipeCapacity, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
 
 const endpoint = (attachment?: Endpoint['attachment'], z = 0): Endpoint => ({ x: 0, y: 0, z, attachment })
 const pipe = (id: string, volume: number, attachment: Endpoint['attachment'], other?: Endpoint['attachment'], tier: 300 | 600 = 300): PipeDocument => ({ id, name: id, length: 10, tier, initialVolume: volume, endpoints: [endpoint(attachment), endpoint(other)] })
@@ -7,6 +7,15 @@ const simple = (pipes: PipeDocument[] = []): NetworkDocument => ({ version: 2, n
 const run = (state: SimulationState, seconds: number): SimulationState => { for (let elapsed = 0; elapsed < seconds - 1e-9; elapsed += state.document.tickSeconds) state = tick(state); return state }
 
 describe('pipe physics', () => {
+  it('clones reactive proxy inputs used by the Svelte editor', () => {
+    const document = createDefaultDocument()
+    const documentProxy = new Proxy(document, {})
+    const state = createSimulation(document)
+    const stateProxy = new Proxy(state, {})
+    expect(cloneDocument(documentProxy)).toEqual(document)
+    expect(cloneState(stateProxy)).toEqual(state)
+    expect(() => tick(stateProxy)).not.toThrow()
+  })
   it('derives capacity from physical length independently of canvas geometry', () => {
     const item = pipe('a', 0, undefined); item.length = 56; item.endpoints[1].x = 1
     expect(pipeCapacity(item)).toBeCloseTo(56 * CAPACITY_PER_METRE)

@@ -14,6 +14,7 @@ Use **Simulate** mode to inspect machines and pipes, step or run the network, an
 - Producers and consumers are one-port cyclic machines with finite internal buffers. A producer completes a batch only when its output buffer has room; a consumer completes a batch only when its input buffer contains enough fluid.
 - Component ports accept one pipe endpoint. Junctions accept up to four. Full ports and junctions reject additional snaps with visible status.
 - Edit mode adds, drags, connects, configures, and deletes pipes, machines, pumps, valves, and buffers. Drag previews keep connected geometry visible. Simulate mode locks topology and configuration, and provides step/run/reset controls.
+- The canvas is unbounded: drag empty space to pan, use the wheel/trackpad to scroll, and hold Ctrl or Command while scrolling to zoom around the pointer.
 
 **Share Link** serializes the configured, versioned network document into the URL hash and copies the full URL. Tick count and current run volumes are deliberately excluded, so opening a shared link starts from the configured initial volumes. Invalid or unsupported payloads are rejected and leave the default network in place.
 

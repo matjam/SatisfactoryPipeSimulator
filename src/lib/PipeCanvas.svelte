@@ -35,6 +35,29 @@
     private network = new Container()
     private observer: ResizeObserver
     private element: HTMLDivElement
+    private viewportInitialized = false
+    private grid?: Graphics
+    private panPointer?: number
+    private readonly wheel = (event: WheelEvent) => {
+      event.preventDefault()
+      if (event.ctrlKey || event.metaKey) {
+        const bounds = this.element.getBoundingClientRect()
+        const pointer = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+        const oldScale = this.network.scale.x
+        const nextScale = Math.max(.2, Math.min(3, oldScale * Math.exp(-event.deltaY * .002)))
+        const world = {
+          x: (pointer.x - this.network.position.x) / oldScale,
+          y: (pointer.y - this.network.position.y) / oldScale,
+        }
+        this.network.scale.set(nextScale)
+        this.network.position.set(pointer.x - world.x * nextScale, pointer.y - world.y * nextScale)
+      } else {
+        const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? this.element.clientHeight : 1
+        this.network.position.x -= event.deltaX * unit
+        this.network.position.y -= event.deltaY * unit
+      }
+      this.drawGrid()
+    }
     constructor(element: HTMLDivElement) { this.element = element; this.observer = new ResizeObserver(() => this.fit()) }
 
     async initialize() {
@@ -42,6 +65,25 @@
       this.element.appendChild(this.app.canvas)
       this.app.stage.addChild(this.network)
       this.observer.observe(this.element)
+      this.element.addEventListener('wheel', this.wheel, { passive: false })
+      this.app.stage.eventMode = 'static'
+      this.app.stage.on('pointerdown', (event: FederatedPointerEvent) => {
+        if (event.target !== this.app.stage || this.panPointer !== undefined) return
+        this.panPointer = event.pointerId
+        const start = event.global.clone()
+        const origin = this.network.position.clone()
+        const move = (next: FederatedPointerEvent) => {
+          if (next.pointerId !== this.panPointer) return
+          this.network.position.set(origin.x + next.global.x - start.x, origin.y + next.global.y - start.y)
+          this.drawGrid()
+        }
+        const up = (next: FederatedPointerEvent) => {
+          if (next.pointerId !== this.panPointer) return
+          this.panPointer = undefined
+          this.app.stage.off('globalpointermove', move).off('pointerup', up).off('pointerupoutside', up)
+        }
+        this.app.stage.on('globalpointermove', move).on('pointerup', up).on('pointerupoutside', up)
+      })
       this.fit()
     }
 
@@ -70,11 +112,9 @@
 
     draw(document: NetworkDocument, state: SimulationState, mode: 'edit' | 'simulate', selected: Selection | undefined, select: (selection: Selection) => void, moveNode: (id: string, x: number, y: number) => void, moveEndpoint: (pipeId: string, endpoint: 0 | 1, x: number, y: number) => void) {
       this.network.removeChildren().forEach((child) => child.destroy({ children: true }))
-      const grid = new Graphics()
-      for (let x = 50; x <= 950; x += 50) grid.moveTo(x, 50).lineTo(x, 520)
-      for (let y = 50; y <= 520; y += 50) grid.moveTo(50, y).lineTo(950, y)
-      grid.stroke({ color: 0x25313a, width: 1, alpha: 0.42 })
-      this.network.addChild(grid)
+      this.grid = new Graphics()
+      this.network.addChild(this.grid)
+      this.drawGrid()
 
       for (const pipe of document.pipes) {
         const [a, b] = pipe.endpoints
@@ -146,20 +186,36 @@
     }
 
     private fit() {
-      const scale = Math.min(this.element.clientWidth / 1000, this.element.clientHeight / 570)
-      this.network.scale.set(scale)
-      this.network.position.set((this.element.clientWidth - 1000 * scale) / 2, (this.element.clientHeight - 570 * scale) / 2)
-      this.app.stage.eventMode = 'static'
       this.app.stage.hitArea = new Rectangle(0, 0, this.element.clientWidth, this.element.clientHeight)
+      if (!this.viewportInitialized && this.element.clientWidth && this.element.clientHeight) {
+        const scale = Math.min(this.element.clientWidth / 1000, this.element.clientHeight / 570)
+        this.network.scale.set(scale)
+        this.network.position.set((this.element.clientWidth - 1000 * scale) / 2, (this.element.clientHeight - 570 * scale) / 2)
+        this.viewportInitialized = true
+      }
+      this.drawGrid()
     }
-    destroy() { this.observer.disconnect(); this.app.destroy(true, { children: true }) }
+    private drawGrid() {
+      if (!this.grid || !this.element.clientWidth || !this.element.clientHeight) return
+      const scale = this.network.scale.x || 1
+      const left = -this.network.position.x / scale
+      const top = -this.network.position.y / scale
+      const right = left + this.element.clientWidth / scale
+      const bottom = top + this.element.clientHeight / scale
+      const step = 50
+      this.grid.clear()
+      for (let x = Math.floor(left / step) * step; x <= right; x += step) this.grid.moveTo(x, top).lineTo(x, bottom)
+      for (let y = Math.floor(top / step) * step; y <= bottom; y += step) this.grid.moveTo(left, y).lineTo(right, y)
+      this.grid.stroke({ color: 0x25313a, width: 1 / scale, alpha: 0.42 })
+    }
+    destroy() { this.observer.disconnect(); this.element.removeEventListener('wheel', this.wheel); this.app.destroy(true, { children: true }) }
   }
 </script>
 
 <div class="canvas" bind:this={host} aria-label="Interactive pipe network"></div>
 
 <style>
-  .canvas { width: 100%; height: 100%; min-height: 460px; overflow: hidden; touch-action: pan-y; }
+  .canvas { width: 100%; height: 100%; min-height: 460px; overflow: hidden; touch-action: none; }
   .canvas :global(canvas) { display: block; }
   @media (max-width: 760px) { .canvas { min-height: 340px; } }
 </style>
