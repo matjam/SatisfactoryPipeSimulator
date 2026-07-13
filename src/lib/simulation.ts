@@ -319,6 +319,13 @@ export function splitPipeAt(document: NetworkDocument, pipeId: string, fraction:
   document.pipes.splice(index + 1, 0, second)
   return second
 }
+export function moveJunction(document: NetworkDocument, junctionId: string, x: number, y: number): void {
+  for (const pipe of document.pipes) for (const endpoint of pipe.endpoints) {
+    if (endpoint.attachment?.kind !== 'junction' || endpoint.attachment.id !== junctionId) continue
+    endpoint.x = x
+    endpoint.y = y
+  }
+}
 export function canAttach(document: NetworkDocument, attachment: Attachment): boolean {
   let count = 0
   const key = attachmentKey(attachment)

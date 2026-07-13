@@ -4,7 +4,7 @@
   import { pipeCapacity, type NetworkDocument, type Selection, type SimulationState } from './simulation'
 
   const FLOW_EPSILON = 1e-6
-  let { document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onerror }: {
+  let { document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onmovejunction, onerror }: {
     document: NetworkDocument
     state: SimulationState
     mode: 'edit' | 'simulate'
@@ -12,6 +12,7 @@
     onselect: (selection: Selection) => void
     onmovenode: (id: string, x: number, y: number) => void
     onmoveendpoint: (pipeId: string, endpoint: 0 | 1, x: number, y: number) => void
+    onmovejunction: (id: string, x: number, y: number) => void
     onerror: (message: string) => void
   } = $props()
 
@@ -23,12 +24,12 @@
     const instance = new PipeRenderer(host)
     void instance.initialize().then(() => {
       if (disposed) instance.destroy()
-      else { renderer = instance; renderer.draw(document, state, mode, selected, onselect, onmovenode, onmoveendpoint) }
+      else { renderer = instance; renderer.draw(document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onmovejunction) }
     }).catch((error: unknown) => onerror(error instanceof Error ? `Renderer failed: ${error.message}` : 'Renderer failed to initialize.'))
     return () => { disposed = true; renderer?.destroy() }
   })
 
-  $effect(() => renderer?.draw(document, state, mode, selected, onselect, onmovenode, onmoveendpoint))
+  $effect(() => renderer?.draw(document, state, mode, selected, onselect, onmovenode, onmoveendpoint, onmovejunction))
 
   class PipeRenderer {
     private app = new Application()
@@ -40,6 +41,7 @@
     private panPointer?: number
     private pipeLayers = new Map<string, Container>()
     private endpointHandles = new Map<string, Container>()
+    private cancelDrag?: () => void
     private readonly wheel = (event: WheelEvent) => {
       event.preventDefault()
       if (event.ctrlKey || event.metaKey) {
@@ -66,6 +68,7 @@
       await this.app.init({ antialias: true, backgroundAlpha: 0, resizeTo: this.element, resolution: window.devicePixelRatio, autoDensity: true })
       this.element.appendChild(this.app.canvas)
       this.app.stage.addChild(this.network)
+      this.network.sortableChildren = true
       this.observer.observe(this.element)
       this.element.addEventListener('wheel', this.wheel, { passive: false })
       this.app.stage.eventMode = 'static'
@@ -95,29 +98,55 @@
       target.cursor = 'move'
       target.on('pointerdown', (event: FederatedPointerEvent) => {
         event.stopPropagation()
+        this.cancelDrag?.()
         const overlay = new Graphics()
+        overlay.zIndex = 200
         this.network.addChild(overlay)
-        const move = (next: FederatedPointerEvent) => {
-          const point = this.network.toLocal(next.global)
+        const pointerId = event.pointerId
+        const pointFromEvent = (next: PointerEvent) => {
+          const bounds = this.element.getBoundingClientRect()
+          return this.network.toLocal({ x: next.clientX - bounds.left, y: next.clientY - bounds.top })
+        }
+        const move = (next: PointerEvent) => {
+          if (next.pointerId !== pointerId) return
+          const point = pointFromEvent(next)
           target.position.set(point.x, point.y)
           preview?.(point.x, point.y, overlay)
         }
-        const up = (next: FederatedPointerEvent) => {
-          this.app.stage.off('globalpointermove', move).off('pointerup', up).off('pointerupoutside', up)
+        const cleanup = () => {
+          window.removeEventListener('pointermove', move)
+          window.removeEventListener('pointerup', up)
+          window.removeEventListener('pointercancel', up)
+          window.removeEventListener('blur', cancel)
+          if (this.app.canvas.hasPointerCapture(pointerId)) this.app.canvas.releasePointerCapture(pointerId)
           overlay.destroy()
           finishPreview?.()
-          const point = this.network.toLocal(next.global)
+          this.cancelDrag = undefined
+        }
+        const cancel = () => cleanup()
+        const up = (next: PointerEvent) => {
+          if (next.pointerId !== pointerId) return
+          const cancelled = next.type === 'pointercancel'
+          const point = pointFromEvent(next)
+          cleanup()
+          if (cancelled) return
           done(Math.round(point.x), Math.round(point.y))
         }
-        this.app.stage.on('globalpointermove', move).on('pointerup', up).on('pointerupoutside', up)
+        window.addEventListener('pointermove', move)
+        window.addEventListener('pointerup', up)
+        window.addEventListener('pointercancel', up)
+        window.addEventListener('blur', cancel)
+        this.app.canvas.setPointerCapture(pointerId)
+        this.cancelDrag = cancel
       })
     }
 
-    draw(document: NetworkDocument, state: SimulationState, mode: 'edit' | 'simulate', selected: Selection | undefined, select: (selection: Selection) => void, moveNode: (id: string, x: number, y: number) => void, moveEndpoint: (pipeId: string, endpoint: 0 | 1, x: number, y: number) => void) {
+    draw(document: NetworkDocument, state: SimulationState, mode: 'edit' | 'simulate', selected: Selection | undefined, select: (selection: Selection) => void, moveNode: (id: string, x: number, y: number) => void, moveEndpoint: (pipeId: string, endpoint: 0 | 1, x: number, y: number) => void, moveJunction: (id: string, x: number, y: number) => void) {
       this.network.removeChildren().forEach((child) => child.destroy({ children: true }))
       this.pipeLayers.clear()
       this.endpointHandles.clear()
       this.grid = new Graphics()
+      this.grid.zIndex = -100
       this.network.addChild(this.grid)
       this.drawGrid()
 
@@ -157,7 +186,9 @@
         this.network.addChild(layer)
         this.pipeLayers.set(pipe.id, layer)
         if (mode === 'edit') pipe.endpoints.forEach((endpoint, index) => {
+          if (endpoint.attachment?.kind === 'junction') return
           const handle = new Container({ x: endpoint.x, y: endpoint.y })
+          handle.zIndex = 100
           handle.addChild(new Graphics().circle(0, 0, 16).fill(endpoint.attachment ? 0xf5a524 : 0x172129).stroke({ color: 0xffcf5c, width: 3 }))
           const other = pipe.endpoints[index === 0 ? 1 : 0]
           const finish = () => { layer.visible = true; handle.visible = true }
@@ -171,6 +202,36 @@
           this.network.addChild(handle)
           this.endpointHandles.set(`${pipe.id}:${index}`, handle)
         })
+      }
+
+      if (mode === 'edit') {
+        const junctions: Record<string, { pipe: NetworkDocument['pipes'][number]; index: 0 | 1 }[]> = {}
+        for (const pipe of document.pipes) pipe.endpoints.forEach((endpoint, index) => {
+          if (endpoint.attachment?.kind !== 'junction') return
+          const refs = junctions[endpoint.attachment.id] ?? []
+          refs.push({ pipe, index: index as 0 | 1 })
+          junctions[endpoint.attachment.id] = refs
+        })
+        for (const [id, refs] of Object.entries(junctions)) {
+          const position = refs[0].pipe.endpoints[refs[0].index]
+          const handle = new Container({ x: position.x, y: position.y })
+          handle.zIndex = 110
+          handle.addChild(new Graphics().rect(-14, -14, 28, 28).fill(0xf5a524).stroke({ color: 0xffefb0, width: 3 }))
+          const finish = () => { for (const ref of refs) { const layer = this.pipeLayers.get(ref.pipe.id); if (layer) layer.visible = true } }
+          this.draggable(handle, true, (x, y) => moveJunction(id, x, y), (x, y, graphics) => {
+            graphics.clear()
+            for (const ref of refs) {
+              const layer = this.pipeLayers.get(ref.pipe.id)
+              if (layer) layer.visible = false
+              const other = ref.pipe.endpoints[ref.index === 0 ? 1 : 0]
+              const capacity = pipeCapacity(ref.pipe)
+              const fill = capacity ? (state.volumes[ref.pipe.id] ?? ref.pipe.initialVolume) / capacity : 0
+              this.previewPipe(graphics, other.x, other.y, x, y, fill)
+            }
+            graphics.rect(x - 14, y - 14, 28, 28).fill(0xf5a524).stroke({ color: 0xffefb0, width: 3 })
+          }, finish)
+          this.network.addChild(handle)
+        }
       }
 
       for (const node of document.components) {
@@ -242,7 +303,7 @@
       for (let y = Math.floor(top / step) * step; y <= bottom; y += step) this.grid.moveTo(left, y).lineTo(right, y)
       this.grid.stroke({ color: 0x25313a, width: 1 / scale, alpha: 0.42 })
     }
-    destroy() { this.observer.disconnect(); this.element.removeEventListener('wheel', this.wheel); this.app.destroy(true, { children: true }) }
+    destroy() { this.cancelDrag?.(); this.observer.disconnect(); this.element.removeEventListener('wheel', this.wheel); this.app.destroy(true, { children: true }) }
   }
 </script>
 
