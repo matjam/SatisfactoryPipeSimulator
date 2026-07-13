@@ -54,7 +54,22 @@ export const componentCapacity = (component: Component): number => component.kin
 export const componentFullHead = (component: Component): number => component.kind === 'buffer' ? 8 : component.kind === 'industrialBuffer' ? 12 : 0
 export const componentPorts = (component: Component): string[] => component.kind === 'producer' ? ['out'] : component.kind === 'consumer' ? ['in'] : ['in', 'out']
 export const attachmentKey = (attachment: Attachment): string => attachment.kind === 'junction' ? `junction:${attachment.id}` : `component:${attachment.id}:${attachment.port}`
-export const cloneDocument = (document: NetworkDocument): NetworkDocument => structuredClone(document)
+export const cloneDocument = (document: NetworkDocument): NetworkDocument => ({
+  version: 2,
+  name: document.name,
+  components: document.components.map((component) => ({ ...component })),
+  pipes: document.pipes.map((pipe) => ({
+    ...pipe,
+    endpoints: pipe.endpoints.map((endpoint) => ({
+      ...endpoint,
+      attachment: endpoint.attachment ? { ...endpoint.attachment } : undefined,
+    })) as [Endpoint, Endpoint],
+  })),
+  defaultTier: document.defaultTier,
+  response: document.response,
+  tickSeconds: document.tickSeconds,
+  fluid: document.fluid,
+})
 export function createId(prefix: string): string { return `${prefix}-${Date.now().toString(36)}-${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}` }
 
 export function makeComponent(kind: ComponentKind, id = createId(kind), x = 500, y = 285): Component {
@@ -90,7 +105,24 @@ export function createSimulation(document: NetworkDocument): SimulationState {
   const snapshot = cloneDocument(document)
   return { document: snapshot, volumes: Object.fromEntries(snapshot.pipes.map((pipe) => [pipe.id, pipe.initialVolume])), componentVolumes: Object.fromEntries(snapshot.components.map((component) => [component.id, 'initialBuffer' in component ? component.initialBuffer : 'initialVolume' in component ? component.initialVolume : 0])), cycleProgress: Object.fromEntries(snapshot.components.map((component) => [component.id, 0])), availableHead: Object.fromEntries(snapshot.pipes.map((pipe) => [pipe.id, localPipeHead(pipe, pipe.initialVolume)])), tick: 0, elapsedSeconds: 0, stats: emptyStats(snapshot) }
 }
-export function cloneState(state: SimulationState): SimulationState { return structuredClone(state) }
+export function cloneState(state: SimulationState): SimulationState {
+  return {
+    document: cloneDocument(state.document),
+    volumes: { ...state.volumes },
+    componentVolumes: { ...state.componentVolumes },
+    cycleProgress: { ...state.cycleProgress },
+    availableHead: { ...state.availableHead },
+    tick: state.tick,
+    elapsedSeconds: state.elapsedSeconds,
+    stats: {
+      ...state.stats,
+      pipes: Object.fromEntries(Object.entries(state.stats.pipes).map(([id, telemetry]) => [id, {
+        ...telemetry,
+        ends: telemetry.ends.map((endpoint) => ({ ...endpoint })) as PipeTelemetry['ends'],
+      }])),
+    },
+  }
+}
 
 function assertSimulationDocument(document: NetworkDocument): void {
   if (!Number.isFinite(document.tickSeconds) || document.tickSeconds < .1 || document.tickSeconds > 10 || !Number.isFinite(document.response) || document.response < 0 || document.response > 1) throw new Error('Invalid simulation timing settings.')
