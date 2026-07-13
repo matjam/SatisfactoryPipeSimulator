@@ -38,6 +38,8 @@
     private viewportInitialized = false
     private grid?: Graphics
     private panPointer?: number
+    private pipeLayers = new Map<string, Container>()
+    private endpointHandles = new Map<string, Container>()
     private readonly wheel = (event: WheelEvent) => {
       event.preventDefault()
       if (event.ctrlKey || event.metaKey) {
@@ -87,7 +89,7 @@
       this.fit()
     }
 
-    private draggable(target: Container, enabled: boolean, done: (x: number, y: number) => void, preview?: (x: number, y: number, graphics: Graphics) => void) {
+    private draggable(target: Container, enabled: boolean, done: (x: number, y: number) => void, preview?: (x: number, y: number, graphics: Graphics) => void, finishPreview?: () => void) {
       if (!enabled) return
       target.eventMode = 'static'
       target.cursor = 'move'
@@ -103,6 +105,7 @@
         const up = (next: FederatedPointerEvent) => {
           this.app.stage.off('globalpointermove', move).off('pointerup', up).off('pointerupoutside', up)
           overlay.destroy()
+          finishPreview?.()
           const point = this.network.toLocal(next.global)
           done(Math.round(point.x), Math.round(point.y))
         }
@@ -112,6 +115,8 @@
 
     draw(document: NetworkDocument, state: SimulationState, mode: 'edit' | 'simulate', selected: Selection | undefined, select: (selection: Selection) => void, moveNode: (id: string, x: number, y: number) => void, moveEndpoint: (pipeId: string, endpoint: 0 | 1, x: number, y: number) => void) {
       this.network.removeChildren().forEach((child) => child.destroy({ children: true }))
+      this.pipeLayers.clear()
+      this.endpointHandles.clear()
       this.grid = new Graphics()
       this.network.addChild(this.grid)
       this.drawGrid()
@@ -150,12 +155,21 @@
         const label = new Text({ text: `${pipe.name}  ${Math.round(fill * 100)}%  ${flowDirection} ${Math.abs(flow).toFixed(2)} m3/tick`, style: new TextStyle({ fontFamily: 'monospace', fontSize: 12, fill: 0xe9f0f2 }) })
         label.anchor.set(.5); label.position.set((a.x + b.x) / 2, (a.y + b.y) / 2 - 27); layer.addChild(label)
         this.network.addChild(layer)
+        this.pipeLayers.set(pipe.id, layer)
         if (mode === 'edit') pipe.endpoints.forEach((endpoint, index) => {
           const handle = new Container({ x: endpoint.x, y: endpoint.y })
           handle.addChild(new Graphics().circle(0, 0, 16).fill(endpoint.attachment ? 0xf5a524 : 0x172129).stroke({ color: 0xffcf5c, width: 3 }))
           const other = pipe.endpoints[index === 0 ? 1 : 0]
-          this.draggable(handle, true, (x, y) => moveEndpoint(pipe.id, index as 0 | 1, x, y), (x, y, graphics) => graphics.clear().moveTo(other.x, other.y).lineTo(x, y).stroke({ color: 0xffcf5c, width: 6, alpha: .8 }))
+          const finish = () => { layer.visible = true; handle.visible = true }
+          this.draggable(handle, true, (x, y) => moveEndpoint(pipe.id, index as 0 | 1, x, y), (x, y, graphics) => {
+            layer.visible = false
+            handle.visible = false
+            graphics.clear()
+            this.previewPipe(graphics, other.x, other.y, x, y, fill)
+            graphics.circle(x, y, 16).fill(endpoint.attachment ? 0xf5a524 : 0x172129).stroke({ color: 0xffcf5c, width: 3 })
+          }, finish)
           this.network.addChild(handle)
+          this.endpointHandles.set(`${pipe.id}:${index}`, handle)
         })
       }
 
@@ -177,12 +191,32 @@
           graphics.clear()
           for (const pipe of document.pipes) for (const [index, endpoint] of pipe.endpoints.entries()) if (endpoint.attachment?.kind === 'component' && endpoint.attachment.id === node.id) {
             const other = pipe.endpoints[index === 0 ? 1 : 0]
-            graphics.moveTo(other.x, other.y).lineTo(x + (endpoint.x - node.x), y + (endpoint.y - node.y))
+            const movedX = x + endpoint.x - node.x, movedY = y + endpoint.y - node.y
+            const capacity = pipeCapacity(pipe)
+            const fill = capacity ? (state.volumes[pipe.id] ?? pipe.initialVolume) / capacity : 0
+            const layer = this.pipeLayers.get(pipe.id)
+            const handle = this.endpointHandles.get(`${pipe.id}:${index}`)
+            if (layer) layer.visible = false
+            if (handle) handle.visible = false
+            this.previewPipe(graphics, other.x, other.y, movedX, movedY, fill)
+            graphics.circle(movedX, movedY, 16).fill(0xf5a524).stroke({ color: 0xffcf5c, width: 3 })
           }
-          graphics.stroke({ color: 0xffcf5c, width: 6, alpha: .8 })
+        }, () => {
+          for (const pipe of document.pipes) for (const [index, endpoint] of pipe.endpoints.entries()) if (endpoint.attachment?.kind === 'component' && endpoint.attachment.id === node.id) {
+            const layer = this.pipeLayers.get(pipe.id)
+            const handle = this.endpointHandles.get(`${pipe.id}:${index}`)
+            if (layer) layer.visible = true
+            if (handle) handle.visible = true
+          }
         })
         this.network.addChild(machine)
       }
+    }
+
+    private previewPipe(graphics: Graphics, x1: number, y1: number, x2: number, y2: number, fill: number) {
+      graphics.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: 0x0b1115, width: 30 })
+      if (fill > 0) graphics.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: fill < .25 ? 0xef5b5b : fill < .6 ? 0xf5a524 : 0x20b8cd, width: Math.max(3, 20 * Math.min(1, fill)) })
+      graphics.moveTo(x1, y1).lineTo(x2, y2).stroke({ color: 0xffcf5c, width: 2, alpha: .9 })
     }
 
     private fit() {

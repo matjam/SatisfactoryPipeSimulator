@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAPACITY_PER_METRE, canAttach, cloneDocument, cloneState, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, pipeCapacity, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
+import { CAPACITY_PER_METRE, canAttach, cloneDocument, cloneState, componentFullHead, createDefaultDocument, createSimulation, deleteSelection, makeComponent, pipeCapacity, splitPipeAt, tick, totalVolume, type Endpoint, type NetworkDocument, type PipeDocument, type SimulationState } from './simulation'
 
 const endpoint = (attachment?: Endpoint['attachment'], z = 0): Endpoint => ({ x: 0, y: 0, z, attachment })
 const pipe = (id: string, volume: number, attachment: Endpoint['attachment'], other?: Endpoint['attachment'], tier: 300 | 600 = 300): PipeDocument => ({ id, name: id, length: 10, tier, initialVolume: volume, endpoints: [endpoint(attachment), endpoint(other)] })
@@ -129,5 +129,22 @@ describe('buffers, machines, and topology', () => {
     let document = createDefaultDocument(); document = deleteSelection(document, { kind: 'producer', id: 'producer-west' }); expect(document.pipes.find((item) => item.id === 'left')!.endpoints[0].attachment).toBeUndefined()
     const junction = { kind: 'junction' as const, id: 'full' }; document = simple(Array.from({ length: 4 }, (_, index) => pipe(String(index), 0, junction))); expect(canAttach(document, junction)).toBe(false)
     const port = { kind: 'component' as const, id: 'producer-east', port: 'out' }; expect(canAttach(createDefaultDocument(), port)).toBe(false)
+  })
+  it('splits a pipe-body connection into a volume-preserving junction', () => {
+    const target = pipe('target', 8, undefined); target.length = 10; target.endpoints = [{ x: 0, y: 0, z: 0 }, { x: 100, y: 0, z: 10 }]
+    const document = simple([target])
+    const second = splitPipeAt(document, target.id, .25, 'junction-body')
+    expect(second).toBeDefined()
+    expect(document.pipes).toHaveLength(2)
+    expect(document.pipes[0].length + document.pipes[1].length).toBeCloseTo(10)
+    expect(document.pipes[0].initialVolume + document.pipes[1].initialVolume).toBeCloseTo(8)
+    expect(document.pipes[0].endpoints[1]).toMatchObject({ x: 25, y: 0, z: 2.5, attachment: { kind: 'junction', id: 'junction-body' } })
+    expect(document.pipes[1].endpoints[0].attachment).toEqual(document.pipes[0].endpoints[1].attachment)
+  })
+  it('rejects pipe-body splits that would create a segment shorter than one metre', () => {
+    const target = pipe('short', 1, undefined); target.length = 2
+    const document = simple([target])
+    expect(splitPipeAt(document, target.id, .25, 'junction-short')).toBeUndefined()
+    expect(document.pipes).toEqual([target])
   })
 })
